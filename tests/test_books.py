@@ -4,10 +4,9 @@ from app.models import Book
 
 @pytest.fixture
 def client():
-    """Фікстура, яка створює тимчасовий додаток та базу даних у пам'яті для кожного тесту"""
+    """Фікстура для створення ізольованої бази даних у пам'яті для тестів"""
     app = create_app()
     app.config['TESTING'] = True
-    # Використовуємо SQLite в пам'яті для швидких тестів, щоб не чіпати основну базу
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
     
     with app.test_client() as client:
@@ -16,25 +15,51 @@ def client():
             yield client
             db.drop_all()
 
-def test_pagination(client):
-    # 1. Додаємо 5 тестових книг у нашу чисту базу
+def test_cursor_pagination_flow(client):
+    # 1. Наповнюємо тимчасову базу 5-ма тестовими книгами
     for i in range(1, 6):
-        client.post('/books', json={'title': f'Book {i}', 'author': f'Author {i}'})
+        client.post('/books', json={'title': f'Книга {i}', 'author': f'Автор {i}'})
 
-    # 2. Тестуємо першу сторінку: limit=2, offset=0 (маємо отримати Book 1 та Book 2)
-    response = client.get('/books?limit=2&offset=0')
+    # 2. Запитуємо ПЕРШУ сторінку (limit=2, без курсору)
+    response = client.get('/books?limit=2')
     data = response.get_json()
     
     assert response.status_code == 200
     assert len(data['books']) == 2
-    assert data['total'] == 5
-    assert data['books'][0]['title'] == 'Book 1'
-    assert data['books'][1]['title'] == 'Book 2'
+    assert data['has_more'] is True
+    assert data['next_cursor'] is not None
+    assert data['books'][0]['title'] == 'Книга 1'
+    assert data['books'][1]['title'] == 'Книга 2'
 
-    # 3. Тестуємо наступну сторінку: limit=2, offset=2 (маємо отримати Book 3 та Book 4)
-    response = client.get('/books?limit=2&offset=2')
+    # Зберігаємо маркер для переходу на другу сторінку
+    first_page_cursor = data['next_cursor']
+
+    # 3. Запитуємо ДРУГУ сторінку, передаючи отриманий курсор
+    response = client.get(f'/books?limit=2&cursor={first_page_cursor}')
     data = response.get_json()
-    
+
     assert response.status_code == 200
     assert len(data['books']) == 2
-    assert data['books'][0]['title'] == 'Book 3'
+    assert data['books'][0]['title'] == 'Книга 3'
+    assert data['books'][1]['title'] == 'Книга 4'
+    assert data['has_more'] is True
+    assert data['next_cursor'] is not None
+
+    second_page_cursor = data['next_cursor']
+
+    # 4. Запитуємо ТРЕТЮ (останню) сторінку
+    response = client.get(f'/books?limit=2&cursor={second_page_cursor}')
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert len(data['books']) == 1  # Залишилася тільки остання 5-та книга
+    assert data['books'][0]['title'] == 'Книга 5'
+    # Сторінка остання, тому наступних елементів немає
+    assert data['has_more'] is False
+    assert data['next_cursor'] is None
+
+def test_invalid_cursor_error(client):
+    """Тест на перевірку захисту від битих або неправильних курсорів"""
+    response = client.get('/books?limit=2&cursor=not_a_base64_string_123')
+    assert response.status_code == 400
+    assert response.get_json()['error'] == 'Некоректний маркер курсору (Invalid cursor)'
