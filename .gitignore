@@ -1,6 +1,13 @@
 __pycache__/
+<<<<<<< HEAD
 *.pyc
 .pytest_cache/
 .venv/
 venv/
 *.db
+=======
+*.py[cod]
+venv/
+.env
+.pytest_cache/
+>>>>>>> 741b65bc965ac542eb134197878aa36387737660
